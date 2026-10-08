@@ -2,8 +2,8 @@ require "English"
 class Envmove < Formula
   desc "Carry the project context git refuses to: .env, handover docs, AI agent state"
   homepage "https://github.com/atalayhuryasar/envmove"
-  url "https://github.com/atalayhuryasar/envmove/archive/refs/tags/v0.2.0.tar.gz"
-  version "0.2.0"
+  url "https://github.com/atalayhuryasar/envmove/archive/refs/tags/v0.3.0.tar.gz"
+  version "0.3.0"
   license "MIT"
   head "https://github.com/atalayhuryasar/envmove.git", branch: "main"
 
