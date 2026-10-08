@@ -33,6 +33,10 @@ clean:
 e2e: build
 	PATH="$(CURDIR)/bin:$$PATH" bash test/guard.sh
 
-## suite — every end-to-end scenario
+## suite — every end-to-end scenario (macOS: needs a login keychain)
 suite: build
-	PATH="$(CURDIR)/bin:$$PATH" bash test/guard.sh
+	@set -e; for s in e2e recover agent restore example hooks; do \
+		printf '\033[1;36m== %s\033[0m\n' "$$s"; \
+		ENVMOVE="$(CURDIR)/bin/envmove" bash "test/$$s.sh"; \
+	done
+	@bash test/guard.sh

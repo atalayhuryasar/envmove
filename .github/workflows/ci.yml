@@ -37,7 +37,7 @@ jobs:
       - name: end to end
         run: |
           set -e
-          for scenario in e2e recover agent restore example; do
+          for scenario in e2e recover agent restore example hooks; do
             echo "::group::$scenario"
             bash "test/$scenario.sh"
             echo "::endgroup::"
