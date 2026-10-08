@@ -178,7 +178,7 @@ func cmdSetup(args []string) error {
 		}
 	}
 
-	candidates, err := detect.Scan(repo)
+	candidates, err := detect.Scan(repo.Root)
 	if err != nil {
 		return err
 	}
@@ -251,34 +251,66 @@ func cmdSetup(args []string) error {
 	return nil
 }
 
+// confirmPaths shows the decision envmove made about every gitignored file, so nothing
+// travels or stays behind without a stated reason.
+//
+// Skipped files are summarised by reason rather than listed. A repository with forty
+// thousand of them would bury the two that matter, and the count per reason is the
+// useful summary anyway.
 func confirmPaths(candidates []detect.Candidate) ([]string, error) {
+	var carry, skip []detect.Candidate
+	skipReasons := map[string]int{}
+	for _, c := range candidates {
+		if c.Class == detect.Carry {
+			carry = append(carry, c)
+			continue
+		}
+		skip = append(skip, c)
+		skipReasons[c.Reason]++
+	}
+
 	if len(candidates) == 0 {
-		fmt.Println("no files found worth sharing.")
+		fmt.Println("\nnothing is gitignored here, so there is nothing to carry.")
 		return nil, nil
 	}
-	fmt.Println("\nfiles detected:")
-	for _, c := range candidates {
-		fmt.Printf("  %-40s %s\n", c.Path, c.Reason)
+
+	fmt.Printf("\n%d files git ignores; envmove will carry %d of them:\n\n", len(candidates), len(carry))
+	for _, c := range carry {
+		fmt.Printf("  carry  %-44s %s\n", c.Path, c.Reason)
 	}
-	fmt.Println("\n[all]  include all   [one]  choose one by one   [none]  skip everything")
+
+	if len(skip) > 0 {
+		fmt.Printf("\nnot carried (%d files):\n", len(skip))
+		reasons := make([]string, 0, len(skipReasons))
+		for r := range skipReasons {
+			reasons = append(reasons, r)
+		}
+		sort.Slice(reasons, func(i, j int) bool { return skipReasons[reasons[i]] > skipReasons[reasons[j]] })
+		for _, r := range reasons {
+			fmt.Printf("  skip   %-44s %s\n", r, plural(skipReasons[r], "file"))
+		}
+		fmt.Println("        .envmoveignore overrides this: list a skipped path to carry it,")
+		fmt.Println("        or a carried one to leave it behind.")
+	}
+
+	if len(carry) == 0 {
+		return nil, nil
+	}
+
+	fmt.Println("\n[all]  carry them all   [one]  choose one by one   [none]  carry nothing")
 	// The answer is matched loosely on purpose. A prompt that rejects what someone
 	// naturally types is worse than one that accepts a synonym.
 	switch normalise(readLine()) {
 	case "", "all", "a", "everything":
-		var out []string
-		for _, c := range candidates {
-			if c.Class == detect.Sync {
-				out = append(out, c.Path)
-			}
+		out := make([]string, 0, len(carry))
+		for _, c := range carry {
+			out = append(out, c.Path)
 		}
 		return out, nil
 	case "one", "1":
 		var out []string
-		for _, c := range candidates {
-			if c.Class != detect.Sync {
-				continue
-			}
-			if askYesNo("  " + c.Path) {
+		for _, c := range carry {
+			if askYesNo("  carry " + c.Path) {
 				out = append(out, c.Path)
 			}
 		}
@@ -477,7 +509,7 @@ func relativeTo(root, path string) string {
 func readPassphrase() string {
 	for attempt := 1; attempt <= 3; attempt++ {
 		if attempt > 1 {
-			fmt.Printf("  tekrar dene (%d/3): ", attempt)
+			fmt.Printf("  try again (%d/3): ", attempt)
 		} else {
 			fmt.Print("  recovery passphrase: ")
 		}
@@ -840,6 +872,14 @@ func hasFlag(args []string, flag string) bool {
 		}
 	}
 	return false
+}
+
+// plural keeps counts reading like English: "1 file", "4 files".
+func plural(n int, word string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, word)
+	}
+	return fmt.Sprintf("%d %ss", n, word)
 }
 
 func short(s string) string {

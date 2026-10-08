@@ -13,8 +13,8 @@ Git carries your code. It refuses to carry the rest:
 | layer | what | example | why it is excluded |
 |---|---|---|---|
 | **T1** | committable project definition | `schema.prisma`, `Dockerfile` | nothing, it is committed |
-| **T2** | not committable but **shared anyway** | `.env`, `AGENTS.md`, `HANDOVER.md`, `TODO.md`, `.claude/` | secrets or noise |
-| **T3** | genuinely machine-local | `node_modules`, `.venv`, caches | correctly ignored |
+| **T2** | **git ignores it, envmove carries it** | `.env`, `.env.local`, `HANDOVER.md`, `.superpowers/` | secrets or noise |
+| **T3** | git ignores it, envmove subtracts it | `node_modules`, `.next`, `*.log` | regenerable |
 
 The gap is T2. Files end up there for two different reasons: **privacy** (`.env` must
 never be committed) and **noise** (nobody wants `HANDOVER.md` in their history). One
@@ -29,6 +29,53 @@ ago.
 > *"You pushed your code. You did not push your conversation."*
 
 ---
+
+## The rule: carry everything git ignores, subtract the junk
+
+Git already knows which files belong to this developer and not to the project. That
+set is exactly what it ignores. envmove starts from the whole set and subtracts.
+
+**The other direction was tried and does not scale.** Matching a list of filenames
+meant every new AI tool needed another entry. The exclusions went from `.claude` to
+`.cursor` to `.opencode` to `.superpowers`, which appeared in three separate real
+repositories, and the next tool would need another pattern. Subtracting junk does not
+have that problem, because junk is a short, stable, well known list.
+
+Measured against three real repositories:
+
+| repository | gitignored | carried | skipped |
+|---|---|---|---|
+| Rose Sole (Next.js + Prisma) | 41054 | 1 | 41053 |
+| Supapulse (Next.js) | 35086 | 3 | 35083 |
+| mailto (Swift) | 4657 | 14 | 4643 |
+
+The permission was real: the first version without a `generated` exclusion carried
+twenty-four files of Prisma client out of a single repository. A permissive default
+needs the exclusion list to be tuned against real checkouts, and it is.
+
+### Two boundaries worth stating precisely
+
+**Gitignored, not untracked.** A file that is untracked but not ignored is on its way
+into a commit. Carrying it would collide with the commit the developer is about to
+make, and would then travel to the other machine as a surprise duplicate.
+
+**Nothing happens invisibly.** Setup lists every file it will carry with a reason, and
+summarises skips by cause rather than one by one, because a repository with forty
+thousand ignored files would otherwise bury the two that matter.
+
+### `.envmoveignore` is a deny list and only a deny list
+
+There is deliberately no way to match a file *in*. That is git's job: if a file should
+be in the repository, the answer is to un-ignore it, not to teach a second tool about
+it. One direction means the file cannot be got wrong, and `envmove add` still exists
+for the case where a file is ignored by a pattern that also covers files you want.
+
+### Why the exclusion list is a list of directories, not files
+
+`node_modules/` in a real project is forty thousand files. Listing them to decide not
+to carry them is wasted work, and the decision is one line rather than forty thousand.
+Exclusions are matched as whole path segments, so a project called `build-tools` is
+never mistaken for a `build` directory.
 
 ## Positioning
 
@@ -401,6 +448,10 @@ publishing, Homebrew formula. **Done.**
 own branch. That is a security hole rather than a feature: two machines adding their
 keys to one branch means every snapshot is encrypted to both, and each can read the
 other's `.env`.
+
+`detect` now starts from the whole gitignored set and subtracts, with `.envmoveignore`
+as the single override. `secretPatterns` and `agentPatterns` survive, but only as
+labels in the setup output: they no longer decide whether a file travels.
 
 **Not planned** — Linux and Windows support.
 
