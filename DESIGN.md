@@ -401,6 +401,24 @@ This closed two deadlocks, both with the same root cause:
 
 Hence: hook mode warns and exits 0, and config publishing uses `--no-verify`.
 
+### The test suite deleted the recovery copies
+
+Same shape of mistake as writing `git config --global`, and found the same way.
+
+The end-to-end scripts cleared `~/.config/envmove/recovery/*.agekey` to start from a
+clean machine state. That directory holds the passphrase-wrapped copy of each machine's
+private key, and it is the only way back after a login keychain loss — the file the
+whole recovery design exists to create. The wildcard deleted it for every real repository
+on the machine. A real project stopped being recoverable, and nothing said so.
+
+The scripts now set `ENVMOVE_RECOVERY_DIR` to their own temporary directory, and
+`test/guard.sh` fingerprints the real directory before and after the suite and fails if
+anything moved. When there is nothing there to protect it says the check was vacuous
+instead of printing a green tick for a guard that proved nothing.
+
+The lesson generalises past the file it was about: a test that resets shared state must
+own that state, or it is a test that deletes a user's data on a schedule nobody chose.
+
 ### A new machine triggers re-encryption
 
 The snapshot records which recipients it was encrypted to. When the config gains a
@@ -576,6 +594,7 @@ came out of it and none came out of a test:
 | 14 s per code-only commit | needs a slow network and a stopwatch |
 | `doctor` blind to a stale hook | needs an install that has aged |
 | nil-pointer panic when a pull fails at session start | needs a pull that fails |
+| the test suite deleting every recovery copy on the machine | needs a real repository |
 
 The lesson is not "write more tests", though there are more tests now. It is that a tool
 whose whole promise is "it just works" has to be walked end to end by a person before its
@@ -583,3 +602,8 @@ claims are true, and the walk has to happen on the hardware the claims are about
 
 Still unverified: two people editing the same file on two machines at the same time, and a
 repository whose `.gitignore` covers a very large number of files.
+
+The last row of that table is the one worth dwelling on. It was not found by walking the
+user journey — it was found by looking at what a real repository was missing afterwards,
+which is worse, because it means the damage was already done. The suite had been deleting
+that file on every run for weeks.

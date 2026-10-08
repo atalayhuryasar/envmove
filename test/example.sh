@@ -10,7 +10,11 @@ PASS='kurtarma-sifresi-2026'
 rm -rf "$ROOT"; mkdir -p "$ROOT"
 # leftover recovery files from an earlier run would skip a setup prompt and shift the
 # scripted answers, so start from a clean machine state.
-rm -f ~/.config/envmove/recovery/*.agekey 2>/dev/null || true
+# Keep recovery copies inside the sandbox. A wildcard on the real
+# ~/.config/envmove/recovery once deleted the recovery copy belonging to every real
+# repository on this machine, which is the only way back after a keychain loss.
+export ENVMOVE_RECOVERY_DIR="$ROOT/recovery"
+rm -rf "$ENVMOVE_RECOVERY_DIR"; mkdir -p "$ENVMOVE_RECOVERY_DIR"
 step() { printf "\n\033[1;36m== %s\033[0m\n" "$1"; }
 # Git identity for the throwaway repositories these scripts build.
 #
@@ -85,6 +89,6 @@ git commit --quiet -am "ornek deleted"
 step "temizlik"
 security delete-generic-password -s envmove -a "repo:$ROOT/work" >/dev/null 2>&1
 security delete-generic-password -s envmove -a "repo:/private$ROOT/work" >/dev/null 2>&1
-rm -f ~/.config/envmove/recovery/*example*.agekey 2>/dev/null
+rm -f "$ENVMOVE_RECOVERY_DIR"/*example*.agekey 2>/dev/null
 rm -rf "$ROOT"
 printf "\n\033[1;32m== example test finished ==\033[0m\n"

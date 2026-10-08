@@ -11,7 +11,11 @@ SECRET_PASS='kurtarma-sifresi-2026-bunu-1passworda-koy'
 rm -rf "$ROOT"; mkdir -p "$ROOT"
 # leftover recovery files from an earlier run would skip a setup prompt and shift the
 # scripted answers, so start from a clean machine state.
-rm -f ~/.config/envmove/recovery/*.agekey 2>/dev/null || true
+# Keep recovery copies inside the sandbox. A wildcard on the real
+# ~/.config/envmove/recovery once deleted the recovery copy belonging to every real
+# repository on this machine, which is the only way back after a keychain loss.
+export ENVMOVE_RECOVERY_DIR="$ROOT/recovery"
+rm -rf "$ENVMOVE_RECOVERY_DIR"; mkdir -p "$ENVMOVE_RECOVERY_DIR"
 step() { printf "\n\033[1;36m== %s\033[0m\n" "$1"; }
 
 # Git identity for the throwaway repositories these scripts build.
@@ -44,9 +48,9 @@ printf 'y\n\nall\nn\n%s\n' "$SECRET_PASS" | "$ENVMOVE" setup 2>&1 | tail -12
 git add envmove.toml && git commit --quiet -m cfg && git push --quiet origin main
 
 step "was the recovery copy written"
-ls -l ~/.config/envmove/recovery/ | tail -2
+ls -l "$ENVMOVE_RECOVERY_DIR" | tail -2
 echo "--- is the content encrypted (first bytes) ---"
-head -c 30 ~/.config/envmove/recovery/*.agekey; echo
+head -c 30 "$ENVMOVE_RECOVERY_DIR"/*.agekey; echo
 
 step "simulate: the keychain entry is deleted"
 security delete-generic-password -s envmove -a "repo:$ROOT/work" >/dev/null 2>&1 || true
@@ -73,8 +77,8 @@ step "doctor again"
 
 step "temizlik"
 security delete-generic-password -s envmove -a "repo:$ROOT/work" >/dev/null 2>&1 || true
-rm -f ~/.config/envmove/recovery/$(basename $ROOT)_work.agekey 2>/dev/null || true
-ls ~/.config/envmove/recovery/ 2>/dev/null | tail -2
+rm -f "$ENVMOVE_RECOVERY_DIR"/$(basename "$ROOT")_work.agekey 2>/dev/null || true
+ls "$ENVMOVE_RECOVERY_DIR" 2>/dev/null | tail -2
 rm -rf "$ROOT"
 
 printf "\n\033[1;32m== recovery test finished ==\033[0m\n"

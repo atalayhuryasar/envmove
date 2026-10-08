@@ -10,7 +10,11 @@ ROOT=/tmp/envmove-hooks
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENVMOVE="${ENVMOVE:-$SCRIPT_DIR/../bin/envmove}"
 rm -rf "$ROOT"; mkdir -p "$ROOT"
-rm -f ~/.config/envmove/recovery/*.agekey 2>/dev/null || true
+# Keep recovery copies inside the sandbox. A wildcard on the real
+# ~/.config/envmove/recovery once deleted the recovery copy belonging to every real
+# repository on this machine, which is the only way back after a keychain loss.
+export ENVMOVE_RECOVERY_DIR="$ROOT/recovery"
+rm -rf "$ENVMOVE_RECOVERY_DIR"; mkdir -p "$ENVMOVE_RECOVERY_DIR"
 
 step() { printf "\n\033[1;36m== %s\033[0m\n" "$1"; }
 fail() { printf "\033[1;31mFAIL: %s\033[0m\n" "$1"; exit 1; }

@@ -16,13 +16,30 @@ import (
 
 const recoveryDir = "envmove/recovery"
 
-// RecoveryPath is where the passphrase-wrapped key lives for a repository.
-func RecoveryPath(repoRoot string) string {
+// EnvRecoveryDir overrides where recovery copies are kept.
+//
+// It exists for the test suite, and the reason it exists is a mistake that was actually
+// made: the end-to-end scripts cleared ~/.config/envmove/recovery with a wildcard, which
+// deleted the recovery copy belonging to every real repository on the machine. That file
+// is the only way back after a keychain loss, so a test suite quietly removing it is the
+// same class of problem as a test writing `git config --global` — reaching outside the
+// sandbox and destroying something the machine owner depends on.
+//
+// Pointing this at a temporary directory means the suite cannot do it again.
+func RecoveryRoot() string {
+	if dir := os.Getenv("ENVMOVE_RECOVERY_DIR"); dir != "" {
+		return dir
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = "."
 	}
-	return filepath.Join(home, ".config", recoveryDir, sanitise(repoRoot)+".agekey")
+	return filepath.Join(home, ".config", recoveryDir)
+}
+
+// RecoveryPath is where the passphrase-wrapped key lives for a repository.
+func RecoveryPath(repoRoot string) string {
+	return filepath.Join(RecoveryRoot(), sanitise(repoRoot)+".agekey")
 }
 
 // WriteRecovery stores the wrapped key with owner-only permissions.
