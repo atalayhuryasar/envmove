@@ -545,13 +545,15 @@ func readPassphrase() string {
 // warns and exits zero. Losing the sync is bad; making the repository uncommittable is
 // worse, and a hook that blocks every commit gets removed, which loses the sync for good.
 func hookScript(self, env string) string {
-	candidates := []string{self}
+	var candidates []string
+	// A Cellar path is a version number with a shelf life, so it is dropped outright: the
+	// opt symlink points at whatever is installed now and keeps pointing after the next
+	// upgrade, and keeping the old path would simply be the bug this exists to remove.
+	if !strings.Contains(self, "/Cellar/") {
+		candidates = append(candidates, self)
+	}
 	if opt := homebrewOptPath(); opt != "" {
-		// A Cellar path is a version number with a shelf life. The opt symlink points at
-		// whatever is installed now and keeps pointing after the next upgrade.
-		if !strings.Contains(self, "/Cellar/") {
-			candidates = append(candidates, opt)
-		}
+		candidates = append(candidates, opt)
 	}
 	candidates = append(candidates, `$(command -v envmove 2>/dev/null)`)
 	return hookScriptWithCandidates(env, candidates)
@@ -930,13 +932,50 @@ func checkHooks(repo *gitx.Repo) {
 			fmt.Printf("         install it (`brew install atalayhuryasar/tap/envmove`) then run `envmove setup`\n")
 			continue
 		}
-		if resolved != running {
+		if !sameBinary(resolved, running) {
 			fmt.Printf("hook     ⚠ %s runs %s\n", name, resolved)
 			fmt.Printf("         you are running %s — run `envmove setup` from this one\n", running)
 			continue
 		}
 		fmt.Printf("hook     ✓ %s\n", name)
 	}
+}
+
+// sameBinary compares two paths that may reach the same file by different routes.
+//
+// Homebrew's /opt/homebrew/bin/envmove is a symlink into the Cellar directory, and
+// os.Executable() resolves it, so a hook and the person typing `envmove` are running the
+// same binary through two different paths. Comparing the strings reports that as a
+// mismatch on every single brew install, and a warning that fires every time is a warning
+// people learn to skip.
+func sameBinary(a, b string) bool {
+	if a == b {
+		return true
+	}
+	resolve := func(p string) string {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return r
+		}
+		return p
+	}
+	ra, rb := resolve(a), resolve(b)
+	if ra == rb {
+		return true
+	}
+	// Fall back to the binaries themselves, which covers a hardlink and any case where
+	// the symlink chain is not the whole story.
+	same := func(p string) (os.FileInfo, bool) {
+		f, err := os.Open(p)
+		if err != nil {
+			return nil, false
+		}
+		defer f.Close()
+		info, err := f.Stat()
+		return info, err == nil
+	}
+	ia, oka := same(ra)
+	ib, okb := same(rb)
+	return oka && okb && os.SameFile(ia, ib)
 }
 
 // resolveHookBinary evaluates the candidate list a generated hook carries, in the order

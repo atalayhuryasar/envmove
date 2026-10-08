@@ -12,22 +12,42 @@ import (
 // directory, so a hook pointing at /opt/homebrew/Cellar/envmove/0.3.1/bin/envmove is
 // broken the moment 0.3.2 is installed, and the failure shows up as commits that no
 // longer carry context, not as an error anyone sees.
-func TestHookScriptSurvivesAMissingInstallPath(t *testing.T) {
+//
+// Getting this backwards is easy and was exactly what happened: keeping the baked path
+// and merely deprioritising it leaves it in the list, still ahead of nothing, still
+// there to be used if the others fail.
+func TestHookScriptDropsTheCellarPath(t *testing.T) {
 	body := hookScript("/opt/homebrew/Cellar/envmove/0.3.1/bin/envmove", "")
 
 	for _, want := range []string{
-		"command -v envmove",                             // PATH fallback
-		"/opt/homebrew/Cellar/envmove/0.3.1/bin/envmove", // baked path
-		"exit 0", // never block a commit
+		"command -v envmove", // PATH fallback
+		"exit 0",             // never block a commit
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the hook is missing %q", want)
 		}
 	}
-	// The stable opt path has to come first, otherwise the Cellar path is what gets
-	// used and it is the one that disappears.
-	if i, j := strings.Index(body, homebrewOptPath()), strings.Index(body, "/opt/homebrew/Cellar/"); i > j {
-		t.Errorf("the Cellar path is tried before the stable opt path, so an upgrade breaks it")
+	if strings.Contains(body, "/opt/homebrew/Cellar/") {
+		t.Errorf("the hook still carries a Cellar path, which an upgrade deletes:\n%s", body)
+	}
+	if opt := homebrewOptPath(); opt != "" && !strings.Contains(body, opt) {
+		t.Errorf("the hook does not use the stable opt path %q", opt)
+	}
+}
+
+// A build from source has to keep using itself. Silently handing the work to an older
+// brew install means a fix you just built never runs, and you cannot tell from outside.
+func TestHookPrefersANonCellarInstall(t *testing.T) {
+	self := "/Users/someone/dev/envmove/bin/envmove"
+	body := hookScript(self, "")
+	if !strings.Contains(body, self) {
+		t.Errorf("the hook dropped its own install path: %s", body)
+	}
+	if strings.Contains(body, "/Cellar/") {
+		t.Errorf("the hook mentions a Cellar path: %s", body)
+	}
+	if opt := homebrewOptPath(); opt != "" && strings.Index(body, self) > strings.Index(body, opt) {
+		t.Errorf("the opt path is tried before the binary that wrote the hook: %s", body)
 	}
 }
 
