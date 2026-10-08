@@ -174,6 +174,7 @@ envmove setup    # once per machine
 envmove          # sync (rarely typed: hooks do this)
 envmove add X    # a new file needs carrying
 envmove doctor   # when something is wrong
+envmove watch    # optional: publish context even when you commit nothing
 ```
 
 `recover`, `restore` and `rotate-key` are rarer still. Every one of them is a recovery
@@ -184,6 +185,12 @@ The rule that produced this shape:
 > **A user who types no commands at all must be able to live in the whole scenario.**
 
 That is what forces the design toward enforcement rather than reminders.
+
+It is also a rule that git's own design breaks in one place. A commit that stages nothing
+runs no hook, so a person who edits `.env` and commits nothing cannot be protected by any
+hook. The rule survives by moving: `doctor` tells the truth about what is waiting, and
+`watch` is there for anyone who wants the guarantee without the command. The claim was
+wrong before the mechanism was; the mechanism arrived second.
 
 ---
 
@@ -210,12 +217,29 @@ Stop          → final push
 The briefing is the part that turns a sync tool into an agent tool. An agent that knows
 where the work stopped does not start from zero.
 
-### No auto-push on every file change
+### Not on every file change, but on every *finished* one
 
 The obvious design is a filesystem watcher that pushes on change. It is wrong here: the
 agent rewrites `.env` five times in a row, so each keystroke-batch would publish a
-half-finished file, and a conflict could appear while nobody is looking. Staging on
-write and publishing at session boundaries avoids all of it.
+half-finished file, and a conflict could appear while nobody is looking.
+
+The same watcher with a debounce is a different design, and it is `envmove watch`. A file
+is published only after it has been completely quiet for a minute, so the half-finished
+states exist on disk and never on the remote. Staging on write and publishing at session
+boundaries stays the default; the watcher is opt-in, because a process that runs for days
+on someone's machine is a thing they choose, not something a setup script installs behind
+their back.
+
+### The hole git cannot close
+
+Staging on write and publishing at boundaries covers commits, pushes and agent sessions.
+It does not cover editing a gitignored file and doing nothing else, because there is no
+commit for a hook to fire on. No git hook fires for a working-tree change; git exits
+before it gets that far.
+
+That gap was found by a person doing exactly what the README told them to do. The fix is
+`watch` plus an honest `doctor` line; the mistake was claiming a guarantee that git's
+design does not allow.
 
 ---
 
@@ -283,6 +307,71 @@ Two details that are easy to get wrong:
 `envmove sync` cannot rely on `PATH`. GitHub Desktop and some IDEs launch git with a
 minimal environment; when `envmove` is missing the hook fails, and a failing pre-push
 hook silently blocks every push. Hooks therefore embed `os.Executable()`.
+
+### A baked path is still a path with a shelf life
+
+Embedding the path was right and turned out to be half a solution. Homebrew deletes the
+previous version's directory on upgrade, so a hook carrying
+`/opt/homebrew/Cellar/envmove/0.3.1/bin/envmove` stopped working the moment 0.3.2 was
+installed — and the symptom was not an error anyone would read, it was commits quietly
+ceasing to carry context.
+
+So a hook now carries a candidate list, tried in order:
+
+1. the path it was installed with, **unless** that path is a Cellar directory
+2. `/opt/homebrew/bin/envmove`, the symlink Homebrew keeps across upgrades
+3. `$(command -v envmove)`
+
+The Cellar exclusion is the whole trick. A version number in a path is a promise about a
+directory that will be deleted; the opt symlink is a promise about the install. And a
+build from source keeps its own path first, because someone testing a fix needs the hooks
+to run that fix rather than an older brew install they have forgotten about.
+
+When every candidate fails, the hook warns on stderr and exits 0. A missing envmove must
+not make the repository uncommittable: a hook that blocks every commit gets deleted by
+the person it is blocking, and then the sync is lost permanently rather than temporarily.
+
+`envmove doctor` reports which binary the hook resolves to and compares it against the
+one being run. That comparison found the problem while it was still being worked on.
+
+### A commit that changed nothing runs no hook at all
+
+The promise was "you never type envmove". Editing `.env`, then running `git commit`,
+broke it: `.env` is gitignored, git stages nothing, git bails out before any hook, and
+the state sat there. `post-commit` cannot help — there is no commit.
+
+This was found by running the journey, not by reading the code. The hooks are correct and
+the promise was still wrong.
+
+`envmove watch` closes it, opt-in, publishing once files have been still for a minute.
+The debounce is the design: the version rejected earlier — publish on every write — would
+ship a half-written `.env` every time an agent rewrote one, which is the failure mode the
+baseline cannot resolve because neither side wrote a complete file.
+
+`envmove doctor` reports the pending count either way, so the state is never invisible.
+
+### The fast path cannot live inside `Push`
+
+A commit that touched only code took fourteen seconds, on a connection where `git fetch`
+alone took four.
+
+The fix reads naturally and is wrong in two places:
+
+- comparing the working tree to the local baseline is free, so the check goes at the top
+  of `Push`, before any network call. Placed after the fetch it saves nothing — the round
+  trip has already been paid.
+- `sync` calls `Pull` **first**, and `Pull` fetches. So even a correct fast path inside
+  `Push` runs after the cost is already incurred. Measured: 47 ms against 11 s, once the
+  check was lifted to `Publish`, which is what the hooks actually call.
+
+A hook calls the operation, not the step. The optimisation belongs where the hook is.
+
+### Hooks publish; humans and sessions sync
+
+`Publish` skips the network when nothing local changed. `Sync` pulls and then pushes,
+because a session starting needs to catch up on the other machine and not just leave
+something behind. Mixing them costs either correctness or latency, so they are separate
+methods with separate callers.
 
 ### The recursion had to be closed in two places
 
@@ -444,6 +533,12 @@ detection, path rewriting. **Done.**
 **v0.2** — `.env.example` generator, `restore`, `rotate-key`, automatic config
 publishing, Homebrew formula. **Done.**
 
+**v0.3** — the detection model inverted: carry everything git ignores, subtract a junk
+list. `.envmoveignore` is a deny-list; `secretPatterns` and `agentPatterns` only label. **Done.**
+
+**v0.4** — `watch`, hooks that survive a Homebrew upgrade, a fast path so a code-only
+commit costs no network, `doctor` reporting the hooks it finds. **Done.**
+
 **Next** — a warning when several people share one repository and should each use their
 own branch. That is a security hole rather than a feature: two machines adding their
 keys to one branch means every snapshot is encrypted to both, and each can read the
@@ -462,11 +557,29 @@ labels in the setup output: they no longer decide whether a file travels.
 Everything is verified by tests, and the tests are honest about their limits:
 
 - unit tests for the merge policy, path rewriting, key rotation, the example
-  generator, detection and the briefing
-- five end-to-end scenarios that build two working copies against a bare remote and
-  walk the whole loop, with the key store exercised for real
+  generator, detection, the briefing, the hook scripts and the idle publisher
+- six end-to-end scenarios that build two working copies against a bare remote and
+  walk the whole loop, with the key store exercised for real — including a real
+  `git commit`, because the hooks are the mechanism and nothing else tested them
 
-What has **not** been verified: a real project, a real `.env`, a real agent session,
-and two physically separate machines. The first-run experience on a repository with an
-existing Claude Code setup is unproven. That is the next thing to do, and it is worth
-more than any feature on the list above.
+What has **not** been verified: a real project on two physically separate machines was
+the long-standing gap, and it is now done. A private repository has two Macs registered,
+two keychains, and a `.env.local` that travelled between them and back.
+
+That journey is worth more than any feature on the list above, because every one of these
+came out of it and none came out of a test:
+
+| found | why no test found it |
+|---|---|
+| a commit with nothing staged runs no hook | the promise was about git behaviour, not envmove |
+| hook pinned to a Cellar path breaks on upgrade | needs an upgrade and a following commit |
+| 14 s per code-only commit | needs a slow network and a stopwatch |
+| `doctor` blind to a stale hook | needs an install that has aged |
+| nil-pointer panic when a pull fails at session start | needs a pull that fails |
+
+The lesson is not "write more tests", though there are more tests now. It is that a tool
+whose whole promise is "it just works" has to be walked end to end by a person before its
+claims are true, and the walk has to happen on the hardware the claims are about.
+
+Still unverified: two people editing the same file on two machines at the same time, and a
+repository whose `.gitignore` covers a very large number of files.

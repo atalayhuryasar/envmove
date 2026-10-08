@@ -155,12 +155,40 @@ That is the whole setup. On the second machine, run the same command.
 You type nothing.
 
 ```
-you edit .env         → staged, not published yet
 you git commit        → context is pushed alongside the code
 you git push          → refused if context was left behind
 agent session starts  → context pulled, briefing printed
 agent session ends    → context pushed
 ```
+
+A commit only fires a hook if there is something to commit. Edit `.env`, change nothing
+else, and the state waits — which is fine if you commit soon after, and a trap if you do
+not. `envmove doctor` always tells you the truth about that:
+
+```
+state    ✓ 0 files in sync, 1 waiting to be pushed
+         run `envmove`
+```
+
+For the days you want it handled without you noticing, `envmove watch` publishes once
+the files have been still for a minute. It waits rather than pushing on every write,
+because an agent rewrites `.env` several times in a row and a half-finished file is
+worse than a late one:
+
+```
+$ envmove watch
+watching 3 files; publishing after 1m0s of quiet. Ctrl-C to stop.
+15:42:10  uploaded .env.local
+15:43:20  uploaded .env.local
+```
+
+It is opt-in and never installed for you. A process that runs for days on your machine is
+something you choose, not something a setup script leaves behind.
+
+A commit that touched only code costs nothing at all: envmove compares the working tree
+against the last synced snapshot locally, finds nothing to send, and returns before any
+network call. Measured on a slow connection that is the difference between fourteen
+seconds per commit and about fifty milliseconds.
 
 Two things happen on their own that are worth seeing once:
 
@@ -207,6 +235,7 @@ Four, and two of them rare.
 | `envmove setup` | once per machine |
 | `envmove add <path>` | a file needs carrying |
 | `envmove doctor` | something looks wrong |
+| `envmove watch` | you edit context and do nothing else |
 | `envmove recover` | the keychain is gone |
 | `envmove restore` | you broke something |
 | `envmove rotate-key` | changing the lock |
@@ -300,16 +329,21 @@ envmove carries state that belongs to *you* between *your* machines. For anythin
 
 ## Status
 
-macOS only, and verified there. v0.2.0.
+macOS only, and verified there.
 
 ```
-7 unit test packages · 5 end-to-end scenarios · 2 CI jobs (Linux + macOS)
+8 unit test packages · 6 end-to-end scenarios · 2 CI jobs (Linux + macOS)
 ```
 
-The end-to-end scenarios build two working copies against a bare remote and walk the
-whole loop with a real keychain. What they do **not** cover, and what is worth knowing
-before you rely on it: two physically separate machines, and first-run behaviour on a
-repository that already has a Claude Code setup.
+Two machines have been set up for real — separate Macs, separate keychains, one private
+remote — and a `.env.local` has travelled between them. That journey is what found most
+of the bugs worth having found: a nil-pointer panic when a pull failed during session
+start, `--help` falling through into a sync, a hook that broke every commit the first
+time Homebrew upgraded and deleted its Cellar directory, and a code-only commit paying
+fourteen seconds for a network round trip it never needed.
+
+What is still unproven: concurrent edits to the same file on both machines at the same
+time, and a repository where `.gitignore` covers a very large number of files.
 
 ## Contributing
 
