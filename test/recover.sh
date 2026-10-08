@@ -2,7 +2,10 @@
 # Recovery scenario: access to the keychain is gone (macOS reinstalled, laptop lost).
 set -e
 ROOT=/tmp/envmove-recover
-ENVMOVE=/tmp/envmove
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# The binary under test is the one this repository builds, not whatever happens to be
+# installed. Hardcoding a path meant the suite tested a stale copy in /tmp.
+ENVMOVE="${ENVMOVE:-$SCRIPT_DIR/../bin/envmove}"
 SECRET_PASS='kurtarma-sifresi-2026-bunu-1passworda-koy'
 
 rm -rf "$ROOT"; mkdir -p "$ROOT"

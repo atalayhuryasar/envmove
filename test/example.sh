@@ -2,7 +2,10 @@
 # .env.example ureteci + otomatik config yayini
 set -e
 ROOT=/tmp/envmove-example
-ENVMOVE=/tmp/envmove
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# The binary under test is the one this repository builds, not whatever happens to be
+# installed. Hardcoding a path meant the suite tested a stale copy in /tmp.
+ENVMOVE="${ENVMOVE:-$SCRIPT_DIR/../bin/envmove}"
 PASS='kurtarma-sifresi-2026'
 rm -rf "$ROOT"; mkdir -p "$ROOT"
 # leftover recovery files from an earlier run would skip a setup prompt and shift the
