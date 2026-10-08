@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  portable:
+    # Everything except the key store is plain Go and runs anywhere. Keeping a Linux
+    # job means a contributor who has never touched a Mac can still run the tests and
+    # open a pull request, which is the difference between "macOS only" being a product
+    # decision and it being a wall.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: go vet ./...
+      - run: go test ./...
+
+  macos:
+    # The key store is macOS specific, so the end-to-end scripts need a real login
+    # keychain and only mean anything here.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - run: make build
+      - run: make lint
+      - run: go test ./...
+
+      - name: end to end
+        run: |
+          set -e
+          for scenario in e2e recover agent restore example; do
+            echo "::group::$scenario"
+            bash "test/$scenario.sh"
+            echo "::endgroup::"
+          done
+
+      - name: the suite must not touch global git config
+        run: bash test/guard.sh
+
+      - name: formula
+        run: brew style Formula/envmove.rb
