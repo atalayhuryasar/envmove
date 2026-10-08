@@ -1,0 +1,6 @@
+# build
+/bin/
+/dist/
+
+# envmove yerel durumu (snapshot baseline, anahtar)
+/.envmove/
