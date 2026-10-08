@@ -79,6 +79,8 @@ func main() {
 		err = cmdRestore(args)
 	case "rotate-key":
 		err = cmdRotateKey(args)
+	case "watch":
+		err = cmdWatch(args)
 	case "hook":
 		event := "session-start"
 		if len(args) > 0 {
@@ -114,6 +116,7 @@ func usage() {
   envmove recover        restore the key if the keychain is gone
   envmove restore [2h|1d|commit]   put the project back
   envmove rotate-key [--all]       replace the key
+  envmove watch [--quiet 90s]      publish when files stop changing
   envmove version
 
 In daily use you do not run envmove. Git and agent hooks do it.
@@ -526,18 +529,76 @@ func readPassphrase() string {
 	return ""
 }
 
+// hookScript renders a git hook that can still find envmove after an upgrade.
+//
+// The absolute path is baked in because PATH cannot be trusted: GUI git clients launch
+// git with a minimal environment, and a hook that cannot find envmove fails. But Homebrew
+// deletes the previous Cellar directory on upgrade, so a hook pointing at
+// /opt/homebrew/Cellar/envmove/0.3.1/bin/envmove breaks the moment 0.3.2 arrives, and
+// then every commit fails.
+//
+// So the baked path is dropped when it points into a Cellar directory, and the stable opt
+// symlink Homebrew maintains takes its place. Every other install keeps its own path
+// first: someone running a build from source expects their build to be what the hooks
+// use, and silently handing the work to an older brew install makes testing a fix
+// impossible. Whatever PATH offers is the last resort, and if all of it fails the hook
+// warns and exits zero. Losing the sync is bad; making the repository uncommittable is
+// worse, and a hook that blocks every commit gets removed, which loses the sync for good.
+func hookScript(self, env string) string {
+	candidates := []string{self}
+	if opt := homebrewOptPath(); opt != "" {
+		// A Cellar path is a version number with a shelf life. The opt symlink points at
+		// whatever is installed now and keeps pointing after the next upgrade.
+		if !strings.Contains(self, "/Cellar/") {
+			candidates = append(candidates, opt)
+		}
+	}
+	candidates = append(candidates, `$(command -v envmove 2>/dev/null)`)
+	return hookScriptWithCandidates(env, candidates)
+}
+
+// homebrewOptPath is the symlink Homebrew keeps at a stable location across upgrades, or
+// "" when envmove is not installed there.
+func homebrewOptPath() string {
+	if _, err := os.Stat("/opt/homebrew/bin/envmove"); err == nil {
+		return "/opt/homebrew/bin/envmove"
+	}
+	return ""
+}
+
+// hookScriptWithCandidates is hookScript with its candidate list supplied, so a test can
+// use paths that do not exist instead of whatever this machine happens to have.
+func hookScriptWithCandidates(env string, candidates []string) string {
+	quoted := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		quoted = append(quoted, `"`+c+`"`)
+	}
+	return `#!/bin/sh
+# envmove git hook. Written by "envmove setup".
+self=""
+for candidate in ` + strings.Join(quoted, " ") + `; do
+  if [ -x "$candidate" ]; then self="$candidate"; break; fi
+done
+if [ -z "$self" ]; then
+  echo "envmove: not found, context is not syncing (this does not block your commit)" >&2
+  exit 0
+fi
+` + env + `exec "$self" sync --hook --quiet
+`
+}
+
 func installHooks(repo *gitx.Repo) error {
-	selfPath := selfPath()
+	self := selfPath()
 	dir := filepath.Join(repo.Root, ".git", "hooks")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	scripts := map[string]string{
 		// post-commit: keep code and context travelling together.
-		"post-commit": "#!/bin/sh\nexec " + selfPath + " sync --hook --quiet\n",
-		// pre-push: never push code while context is left behind. ENVMOVE_NO_PUSH
-		// stops the hook's own sync from recursing into git push.
-		"pre-push": "#!/bin/sh\nENVMOVE_NO_PUSH=1 exec " + selfPath + " sync --hook --quiet\n",
+		"post-commit": hookScript(self, ""),
+		// pre-push: never push code while context was left behind. ENVMOVE_NO_PUSH stops
+		// the hook's own sync from recursing into git push.
+		"pre-push": hookScript(self, "ENVMOVE_NO_PUSH=1 "),
 	}
 	for name, body := range scripts {
 		path := filepath.Join(dir, name)
@@ -597,6 +658,26 @@ func cmdSync(cmd string, args []string) error {
 	s, err := buildSyncer(repo, cfg)
 	if err != nil {
 		return fail(err, inHook)
+	}
+
+	// A hook publishes; a human or a session start syncs. Publishing does not fetch,
+	// so a commit that touched only code costs no network at all.
+	if inHook && cmd == "sync" {
+		d, published, err := s.Publish()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "envmove: %v\n", err)
+		}
+		if !quiet {
+			for _, c := range d.Changes {
+				if c.Kind == syncer.Outgoing {
+					fmt.Printf("↑ %s\n", c.Path)
+				}
+			}
+			if published {
+				fmt.Printf("\n✓ %q branch'ine gönderildi\n", cfg.Branch)
+			}
+		}
+		return nil
 	}
 
 	if cmd != "push" {
@@ -801,12 +882,85 @@ func cmdDoctor(args []string) error {
 	if len(d.Outgoing) > 0 {
 		fmt.Println("         run `envmove`")
 	}
+	checkHooks(repo)
+
 	if suggestion := suggestExample(repo); suggestion != "" {
 		fmt.Printf("\nexample   ⚠ %s\n", suggestion)
 		fmt.Println("           run `envmove add .env.example` to opt it in, and the next")
 		fmt.Println("           `envmove` run will generate it with empty values")
 	}
 	return nil
+}
+
+// checkHooks reports whether the installed hooks can still find envmove.
+//
+// A hook bakes in an absolute path, and Homebrew deletes the Cellar directory of the
+// previous version on upgrade. So an install from months ago can be pointing at a binary
+// that no longer exists, and every commit either fails or silently stops syncing. That
+// failure is invisible until you notice the other machine never got the file, which is
+// exactly the kind of quiet wrongness this tool exists to remove.
+//
+// It also compares the hook's binary against the one running now. If they differ, the
+// hook is running a different version of envmove than the one being typed, which is how
+// a fix you just installed fails to take effect.
+func checkHooks(repo *gitx.Repo) {
+	running := selfPath()
+	for _, name := range []string{"post-commit", "pre-push"} {
+		path := filepath.Join(repo.Root, ".git", "hooks", name)
+		body, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Printf("hook     ✗ %s not installed — git commits will not carry context\n", name)
+			fmt.Printf("         run `envmove setup` to install it\n")
+			continue
+		}
+		if !strings.Contains(string(body), "envmove") {
+			continue // the repository's own hook; nothing to say about it
+		}
+
+		if !strings.Contains(string(body), "command -v envmove") {
+			fmt.Printf("hook     ⚠ %s was written by an older envmove\n", name)
+			fmt.Printf("         it has no fallback and breaks after a Homebrew upgrade\n")
+			fmt.Printf("         run `envmove setup` to rewrite it\n")
+			continue
+		}
+
+		resolved := resolveHookBinary(string(body))
+		if resolved == "" {
+			fmt.Printf("hook     ✗ %s cannot find envmove — context is not syncing\n", name)
+			fmt.Printf("         install it (`brew install atalayhuryasar/tap/envmove`) then run `envmove setup`\n")
+			continue
+		}
+		if resolved != running {
+			fmt.Printf("hook     ⚠ %s runs %s\n", name, resolved)
+			fmt.Printf("         you are running %s — run `envmove setup` from this one\n", running)
+			continue
+		}
+		fmt.Printf("hook     ✓ %s\n", name)
+	}
+}
+
+// resolveHookBinary evaluates the candidate list a generated hook carries, in the order
+// the shell would try it, and returns the first one that is executable.
+func resolveHookBinary(body string) string {
+	start := strings.Index(body, "for candidate in ")
+	if start < 0 {
+		return ""
+	}
+	rest := body[start+len("for candidate in "):]
+	end := strings.Index(rest, "; do")
+	if end < 0 {
+		return ""
+	}
+	for _, candidate := range strings.Split(rest[:end], " ") {
+		candidate = strings.Trim(candidate, `"`)
+		if candidate == "" {
+			continue
+		}
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------- helpers
