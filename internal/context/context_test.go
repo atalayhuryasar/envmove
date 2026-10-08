@@ -112,3 +112,15 @@ func TestEmptyRepoStillProducesABriefing(t *testing.T) {
 		t.Errorf("a briefing should be produced even for an empty repo:\n%s", md)
 	}
 }
+
+// A snapshot that cannot be decrypted leaves Pull with nothing to report. That happens
+// on a machine that has just joined, which is exactly the session that must not crash.
+func TestNilDiffStillProducesABriefing(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "HANDOVER.md", "x\n")
+
+	md := Build(root, nil).Markdown(time.Now())
+	if !strings.Contains(md, "session briefing") {
+		t.Errorf("nil diff should still produce a briefing:\\n%s", md)
+	}
+}

@@ -50,7 +50,16 @@ var handoverSources = []source{
 }
 
 // Build assembles the briefing from the working tree and the sync state.
+//
+// A nil diff is a real case, not a defensive afterthought: when a snapshot cannot be
+// decrypted, for instance on a machine that has just joined, Pull reports the failure
+// and hands back nothing. The hook still has to produce a briefing rather than crash,
+// because a panicking session start is the worst possible outcome for the machine that
+// needs help most.
 func Build(root string, d *syncer.Diff) Briefing {
+	if d == nil {
+		d = &syncer.Diff{}
+	}
 	b := Briefing{Repo: filepath.Base(root), TotalFiles: len(d.Changes)}
 
 	for _, s := range handoverSources {

@@ -39,6 +39,24 @@ func main() {
 	}
 
 	args := os.Args[1:]
+
+	// Flags are handled before the command is chosen. Without this, `envmove --help`
+	// fell through to the default command and tried to sync, which is a baffling thing
+	// to happen when someone asks for help.
+	for _, a := range args {
+		switch a {
+		case "-h", "--help", "help":
+			usage()
+			return
+		case "-v", "--version":
+			fmt.Println("envmove", version)
+			return
+		}
+		if !strings.HasPrefix(a, "-") {
+			break // reached the subcommand, stop scanning flags
+		}
+	}
+
 	cmd := "sync"
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd = args[0]
